@@ -1,16 +1,27 @@
-import { Buffer } from 'buffer';
-import * as CryptoJS from 'crypto-js';
+import errors from '../mappings/errors';
+
+import { ErrorI } from '../common/response.types';
 
 export async function domainToNonFungId(name: string, isByteId = true) {
 
-    const data = CryptoJS.enc.Utf8.parse(name);
+    if (typeof globalThis.crypto === 'undefined') {
+        try {
+            const { webcrypto } = await import('crypto');
+            globalThis.crypto = webcrypto;
+        } catch (error) {
+            throw new Error('No suitable crypto module found in this environment.');
+        }
+    }
 
-    const hash = CryptoJS.SHA256(data);
-    const hashBuffer = Buffer.from(hash.toString(CryptoJS.enc.Hex), 'hex');
+    const encoder = new TextEncoder();
+    const data = encoder.encode(name);
 
-    const truncatedHashBuffer = hashBuffer.subarray(0, 16);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
+    const hashArray = new Uint8Array(digest);
 
-    const hexString = Array.from(new Uint8Array(truncatedHashBuffer))
+    const truncatedHash = hashArray.slice(0, 16);
+
+    const hexString = Array.from(truncatedHash)
         .map(byte => byte.toString(16).padStart(2, '0'))
         .reverse()
         .join('');
@@ -25,124 +36,77 @@ export function stripExtension(domain: string) {
 
 }
 
-export function validateDomain(domain: string) {
+export function validateDomain(domain: string): true | ErrorI {
 
     const parts = domain.split('.');
 
-    if (parts?.[1] !== 'xrd') {
+    if (parts?.[1] !== 'xrd')
+        return errors.domain.invalid({ domain, verbose: 'Invalid domain extension.' });
 
-        return {
-            valid: false,
-            message: "Invalid domain extension."
-        };
+    if (parts[0].length < 2)
+        return errors.domain.invalid({ domain, verbose: 'Domain name must be 2+ characters in length.' });
 
-    }
+    if (parts[0].length > 65)
+        return errors.domain.invalid({ domain, verbose: 'Max domain length is 65 characters.' });
 
-    if (parts[0].length < 2) {
+    if (domain.includes('_'))
+        return errors.domain.invalid({ domain, verbose: 'Special characters are not permitted (except for hyphens).' });
 
-        return {
-            valid: false,
-            message: "Domain name must be 2+ characters in length."
-        };
+    const domainFormatRegex = /^(([a-zA-Z0-9]{2,})|([a-zA-Z]{1}[a-zA-Z]{1})|([a-zA-Z]{1}[0-9]{1})|([0-9]{1}[a-zA-Z]{1})|([a-zA-Z0-9][a-zA-Z0-9-_]{1,61}[a-zA-Z0-9]))\.xrd$/;
 
-    }
+    if (domainFormatRegex.test(domain) === false)
+        return errors.domain.invalid({ domain, verbose: 'Domain name format is incorrect.' });
 
-    if (parts[0].length > 65) {
 
-        return {
-            valid: false,
-            message: "Max domain length is 65 characters."
-        };
-
-    }
-
-    if (domain.includes('_')) {
-
-        return {
-            valid: false,
-            message: "Special characters are not permitted (except for hyphens)."
-        };
-
-    }
-
-    const regex = /^(([a-zA-Z0-9]{2,})|([a-zA-Z]{1}[a-zA-Z]{1})|([a-zA-Z]{1}[0-9]{1})|([0-9]{1}[a-zA-Z]{1})|([a-zA-Z0-9][a-zA-Z0-9-_]{1,61}[a-zA-Z0-9]))\.xrd$/;
-
-    if (regex.test(domain) === false) {
-
-        return {
-            valid: false,
-            message: "Please enter a valid domain name."
-        };
-
-    }
-
-    return {
-        valid: true,
-        message: ''
-    };
-
+    return true;
 }
 
-export function validateSubdomain(subdomain: string) {
+export function validateSubdomain(subdomain: string): true | ErrorI {
 
     const parts = subdomain.split('.');
 
-    if (parts?.length !== 3 || parts[0].length < 2) {
+    if (parts?.length !== 3 || parts[0].length < 2)
+        return errors.subdomain.invalid({ subdomain, verbose: 'Invalid subdomain format. Format should follow {subdomain}.{primary-domain}.xrd' });
 
-        return {
-            valid: false,
-            message: "Invalid subdomain format. Format should follow {subdomain}.{primary-domain}.xrd"
-        };
+    if (subdomain.includes('_'))
+        return errors.subdomain.invalid({ subdomain, verbose: 'Special characters are not permitted (except for hyphens).' });
 
-    }
+    const subdomainFormatRegex = /^(([a-zA-Z]{1})|([a-zA-Z]{1}[a-zA-Z]{1})|([a-zA-Z]{1}[0-9]{1})|([0-9]{1}[a-zA-Z]{1})|([a-zA-Z0-9][a-zA-Z0-9\-]{1,61}[a-zA-Z0-9]))(\.([a-zA-Z0-9][a-zA-Z0-9\-]{1,61}[a-zA-Z0-9]))*\.xrd$/;
 
-    if (subdomain.includes('_')) {
+    if (subdomainFormatRegex.test(subdomain) === false)
+        return errors.subdomain.invalid({ subdomain, verbose: 'Subdomain name format is incorrect.' });
 
-        return {
-            valid: false,
-            message: "Special characters are not permitted (except for hyphens)."
-        };
+    return true;
+}
 
-    }
+export function validateDomainEntity(domainEntity: string): true | ErrorI {
 
-    const regex = /^(([a-zA-Z]{1})|([a-zA-Z]{1}[a-zA-Z]{1})|([a-zA-Z]{1}[0-9]{1})|([0-9]{1}[a-zA-Z]{1})|([a-zA-Z0-9][a-zA-Z0-9\-]{1,61}[a-zA-Z0-9]))(\.([a-zA-Z0-9][a-zA-Z0-9\-]{1,61}[a-zA-Z0-9]))*\.xrd$/;
+    const domainType = deriveDomainType(domainEntity);
 
-    if (regex.test(subdomain) === false) {
+    if (typeof domainType !== 'string' && 'error' in domainType)
+        return domainType;
 
-        return {
-            valid: false,
-            message: "Please enter a valid subdomain name format."
-        };
+    if (domainType === "root")
+        return validateDomain(domainEntity);
 
-    }
-
-    return {
-        valid: true,
-        message: ''
-    };
+    if (domainType === "sub")
+        return validateSubdomain(domainEntity);
 
 }
 
-export function validateDomainEntity(domain: string) {
+export function deriveDomainType(domain: string): 'root' | 'sub' | ErrorI {
 
-    const isValidDomain = validateDomain(domain);
-    const isValidSubdomain = validateSubdomain(domain);
+    const parts = domain.split('.');
 
-    if (!isValidDomain.valid && !isValidSubdomain.valid) {
-
-        return {
-            valid: false,
-            message: isValidDomain.message.trim().length > 0 ? isValidDomain.message : isValidSubdomain.message.trim().length > 0 ? isValidSubdomain.message : 'Unknown domain validation error.'
-        }
-
+    if (parts.length === 2 && parts[1] === 'xrd') {
+        return 'root';
+    } else if (parts.length === 3 && parts[2] === 'xrd') {
+        return 'sub';
     }
 
-    return {
-        valid: true,
-        message: ''
-    }
-
+    return errors.domain.invalid({ domain, verbose: 'Domain type is neither a valid root domain nor subdomain.' });
 }
+
 
 export function normaliseDomain(domain: string) {
 

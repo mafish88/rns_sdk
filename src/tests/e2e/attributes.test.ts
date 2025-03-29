@@ -1,23 +1,34 @@
-import RnsKit from '../..';
+import RnsSDK, { DomainAttributesResponseT } from '../..';
+import Decimal from 'decimal.js';
 import { matchObjectTypes } from '../utils';
+import { convertToDecimal } from '../../utils/decimal.utils';
 
-const attributesSchema = {
-    status: 'string',
-    verbose: 'string'
-};
+describe('RNS - Fetch Domain Attributes', () => {
+    const rns = new RnsSDK({ network: 'stokenet' });
 
+    it(`should return a 'registered' or 'settlement' status and decimal / numerical denoted price.`, async () => {
 
-describe('RnsKit', () => {
+        const attributes = await rns.getDomainStatus({ domain: 'radixnameservice.xrd' });
 
-    const rns = new RnsKit({ network: 'stokenet' });
+        if (attributes.errors) {
+            throw new Error('Domain status was not returned.');
+        }
 
-    it(`should return a 'registered' or 'settltment' status.`, async () => {
+        if (!matchObjectTypes<DomainAttributesResponseT>(attributes.data, ['status', 'verbose', 'price'])) {
+            throw new Error('Attributes did not match expected schema');
+        }
 
-        const attributes = await rns.getDomainAttributes('radixnameservice.xrd');
+        expect(attributes.data.status).not.toBe('available');
+        expect(
+            typeof attributes.data.price === 'object' &&
+            typeof attributes.data.price.usd === 'number' &&
+            (typeof attributes.data.price.xrd === 'number' || typeof attributes.data.price.xrd === 'object')
+        ).toBe(true);
 
-        expect(matchObjectTypes(attributes, attributesSchema)).toBe(true);
-        expect(attributes.status).not.toBe('available');
+        const xrdPriceDecimal = convertToDecimal(attributes.data.price.xrd);
+        expect(xrdPriceDecimal).toBeInstanceOf(Decimal);
+        expect(xrdPriceDecimal.toNumber()).toBeGreaterThan(0);
+        expect(attributes.data.price.usd).toBe(4);
 
     });
-
 });
